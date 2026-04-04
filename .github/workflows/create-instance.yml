@@ -1,22 +1,18 @@
-name: Create Oracle Free Tier Instance
-
-on:
-  schedule:
-    - cron: '*/15 * * * *'  # co 15 minut
-  workflow_dispatch:  # manual trigger
-
-jobs:
-  create:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    - name: Install dependencies
+    - name: Create OCI config
       run: |
-        pip install -r requirements.txt
+        cat > oci_config <<EOF
+        [DEFAULT]
+        user=${{ secrets.OCI_USER_ID }}
+        fingerprint=${{ secrets.OCI_KEY_FINGERPRINT }}
+        tenancy=${{ secrets.OCI_TENANCY_ID }}
+        region=${{ secrets.OCI_REGION }}
+        key_file=./oci_api_key.pem
+        EOF
+
+        cat > oci_api_key.pem <<EOF
+        ${{ secrets.OCI_PRIVATE_KEY }}
+        EOF
+
     - name: Create instance
       env:
         OCI_USER_ID: ${{ secrets.OCI_USER_ID }}
