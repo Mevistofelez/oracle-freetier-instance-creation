@@ -21,24 +21,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install oci python-dotenv requests paramiko
 
-      - name: Create OCI config
+      - name: Prepare OCI files
         shell: bash
         run: |
-          cat > oci_config <<EOF
+          sudo mkdir -p /home/ubuntu/oracle-freetier-instance-creation
+
+          sudo tee /home/ubuntu/oracle-freetier-instance-creation/oci_config > /dev/null <<EOF
           [DEFAULT]
           user=${{ secrets.OCI_USER_ID }}
           fingerprint=${{ secrets.OCI_KEY_FINGERPRINT }}
           tenancy=${{ secrets.OCI_TENANCY_ID }}
           region=${{ secrets.OCI_REGION }}
-          key_file=./oci_api_key.pem
+          key_file=/home/ubuntu/oracle-freetier-instance-creation/oci_api_key.pem
           EOF
 
-          cat > oci_api_key.pem <<EOF
+          sudo tee /home/ubuntu/oracle-freetier-instance-creation/oci_api_key.pem > /dev/null <<EOF
           ${{ secrets.OCI_PRIVATE_KEY }}
           EOF
 
-          chmod 600 oci_api_key.pem
-          echo "OCI config created"
+          sudo chmod 600 /home/ubuntu/oracle-freetier-instance-creation/oci_api_key.pem
+          sudo ls -la /home/ubuntu/oracle-freetier-instance-creation
 
       - name: Debug OCI env
         shell: bash
