@@ -14,13 +14,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
-          pip install oci python-dotenv requests
+          python -m pip install --upgrade pip
+          pip install oci python-dotenv requests paramiko
 
       - name: Create OCI config
+        shell: bash
         run: |
           cat > oci_config <<EOF
           [DEFAULT]
@@ -34,6 +36,32 @@ jobs:
           cat > oci_api_key.pem <<EOF
           ${{ secrets.OCI_PRIVATE_KEY }}
           EOF
+
+          chmod 600 oci_api_key.pem
+          echo "OCI config created"
+
+      - name: Debug OCI env
+        shell: bash
+        env:
+          OCI_USER_ID: ${{ secrets.OCI_USER_ID }}
+          OCI_TENANCY_ID: ${{ secrets.OCI_TENANCY_ID }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+          OCI_SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
+          OCI_IMAGE_ID: ${{ secrets.OCI_IMAGE_ID }}
+          OCI_KEY_FINGERPRINT: ${{ secrets.OCI_KEY_FINGERPRINT }}
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+        run: |
+          echo "=== DEBUG OCI ENV ==="
+          [ -n "$OCI_USER_ID" ] && echo "OCI_USER_ID OK" || echo "OCI_USER_ID EMPTY"
+          [ -n "$OCI_TENANCY_ID" ] && echo "OCI_TENANCY_ID OK" || echo "OCI_TENANCY_ID EMPTY"
+          [ -n "$OCI_REGION" ] && echo "OCI_REGION OK" || echo "OCI_REGION EMPTY"
+          [ -n "$OCI_COMPARTMENT_ID" ] && echo "OCI_COMPARTMENT_ID OK" || echo "OCI_COMPARTMENT_ID EMPTY"
+          [ -n "$OCI_SUBNET_ID" ] && echo "OCI_SUBNET_ID OK" || echo "OCI_SUBNET_ID EMPTY"
+          [ -n "$OCI_IMAGE_ID" ] && echo "OCI_IMAGE_ID OK" || echo "OCI_IMAGE_ID EMPTY"
+          [ -n "$OCI_KEY_FINGERPRINT" ] && echo "OCI_KEY_FINGERPRINT OK" || echo "OCI_KEY_FINGERPRINT EMPTY"
+          [ -n "$OCI_PRIVATE_KEY" ] && echo "OCI_PRIVATE_KEY OK" || echo "OCI_PRIVATE_KEY EMPTY"
+          echo "====================="
 
       - name: Create instance
         env:
