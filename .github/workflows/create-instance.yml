@@ -17,6 +17,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install oci python-dotenv requests paramiko
@@ -25,8 +26,9 @@ jobs:
         shell: bash
         run: |
           sudo mkdir -p /home/ubuntu/oracle-freetier-instance-creation
+          sudo chown -R "$(id -un)":"$(id -gn)" /home/ubuntu/oracle-freetier-instance-creation
 
-          sudo tee /home/ubuntu/oracle-freetier-instance-creation/oci_config > /dev/null <<EOF
+          cat > /home/ubuntu/oracle-freetier-instance-creation/oci_config <<EOF
           [DEFAULT]
           user=${{ secrets.OCI_USER_ID }}
           fingerprint=${{ secrets.OCI_KEY_FINGERPRINT }}
@@ -35,12 +37,16 @@ jobs:
           key_file=/home/ubuntu/oracle-freetier-instance-creation/oci_api_key.pem
           EOF
 
-          sudo tee /home/ubuntu/oracle-freetier-instance-creation/oci_api_key.pem > /dev/null <<EOF
+          cat > /home/ubuntu/oracle-freetier-instance-creation/oci_api_key.pem <<EOF
           ${{ secrets.OCI_PRIVATE_KEY }}
           EOF
 
-          sudo chmod 600 /home/ubuntu/oracle-freetier-instance-creation/oci_api_key.pem
-          sudo ls -la /home/ubuntu/oracle-freetier-instance-creation
+          chmod 600 /home/ubuntu/oracle-freetier-instance-creation/oci_api_key.pem
+          chmod 644 /home/ubuntu/oracle-freetier-instance-creation/oci_config
+
+          echo "=== OCI FILES ==="
+          ls -la /home/ubuntu/oracle-freetier-instance-creation
+          echo "================="
 
       - name: Debug OCI env
         shell: bash
