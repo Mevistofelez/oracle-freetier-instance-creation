@@ -81,4 +81,15 @@ jobs:
           OCI_IMAGE_ID: ${{ secrets.OCI_IMAGE_ID }}
           OCI_KEY_FINGERPRINT: ${{ secrets.OCI_KEY_FINGERPRINT }}
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
-        run: python main.py
+        run: python -u main.py
+
+      - name: Upload SSH keys and instance info
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oci-instance-credentials
+          path: |
+            id_rsa.pub
+            id_rsa_private
+            INSTANCE_CREATED
+          retention-days: 30
