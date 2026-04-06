@@ -83,6 +83,20 @@ jobs:
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
         run: python -u main.py
 
+      - name: Verify generated files
+        if: always()
+        shell: bash
+        run: |
+          echo "=== SPRAWDZAM WYGENEROWANE PLIKI ==="
+          for f in id_rsa.pub id_rsa_private INSTANCE_CREATED; do
+            if [ -f "$f" ]; then
+              echo "OK: $f ($(wc -c < "$f") bajtow)"
+            else
+              echo "BRAK: $f"
+            fi
+          done
+          echo "===================================="
+
       - name: Upload SSH keys and instance info
         if: always()
         uses: actions/upload-artifact@v4
