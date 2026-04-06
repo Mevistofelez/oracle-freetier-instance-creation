@@ -35,7 +35,8 @@ OCI_SUBNET_ID = os.getenv("OCI_SUBNET_ID", None).strip() if os.getenv("OCI_SUBNE
 OPERATING_SYSTEM = os.getenv("OPERATING_SYSTEM", "").strip()
 OS_VERSION = os.getenv("OS_VERSION", "").strip()
 ASSIGN_PUBLIC_IP = os.getenv("ASSIGN_PUBLIC_IP", "false").strip()
-BOOT_VOLUME_SIZE = os.getenv("BOOT_VOLUME_SIZE", "50").strip()
+# BOOT_VOLUME_SIZE: domyślnie 200GB (maksimum free tier) zamiast oryginalnych 50GB
+BOOT_VOLUME_SIZE = os.getenv("BOOT_VOLUME_SIZE", "200").strip()
 NOTIFY_EMAIL = os.getenv("NOTIFY_EMAIL", 'False').strip().lower() == 'true'
 EMAIL = os.getenv("EMAIL", "").strip()
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "").strip()
@@ -49,36 +50,43 @@ try:
     if OCI_COMPUTE_SHAPE not in (ARM_SHAPE, E2_MICRO_SHAPE):
         raise ValueError(f"{OCI_COMPUTE_SHAPE} is not an acceptable shape")
     env_has_spaces = any(isinstance(confg_var, str) and " " in confg_var
-                        for confg_var in [OCI_CONFIG, OCT_FREE_AD,WAIT_TIME,
-                                SSH_AUTHORIZED_KEYS_FILE, OCI_IMAGE_ID, 
-                                OCI_COMPUTE_SHAPE, SECOND_MICRO_INSTANCE, 
-                                OCI_SUBNET_ID, OS_VERSION, NOTIFY_EMAIL,EMAIL,
+                        for confg_var in [OCI_CONFIG, OCT_FREE_AD, WAIT_TIME,
+                                SSH_AUTHORIZED_KEYS_FILE, OCI_IMAGE_ID,
+                                OCI_COMPUTE_SHAPE, SECOND_MICRO_INSTANCE,
+                                OCI_SUBNET_ID, OS_VERSION, NOTIFY_EMAIL, EMAIL,
                                 EMAIL_PASSWORD, DISCORD_WEBHOOK]
                         )
-    config_has_spaces = any(' ' in value for section in config.sections() 
+    config_has_spaces = any(' ' in value for section in config.sections()
                             for _, value in config.items(section))
     if env_has_spaces:
         raise ValueError("oci.env has spaces in values which is not acceptable")
     if config_has_spaces:
-        raise ValueError("oci_config has spaces in values which is not acceptable")        
+        raise ValueError("oci_config has spaces in values which is not acceptable")
 
 except configparser.Error as e:
     with open("ERROR_IN_CONFIG.log", "w", encoding='utf-8') as file:
         file.write(str(e))
+    print(f"Error reading the configuration file: {e}", flush=True)
 
-    print(f"Error reading the configuration file: {e}")
-
-# Set up logging
+# Set up logging - logi do pliku ORAZ do stdout (widoczne w GitHub Actions)
 logging.basicConfig(
-    filename="setup_and_info.log",
+    handlers=[
+        logging.FileHandler("setup_and_info.log"),
+        logging.StreamHandler(sys.stdout)
+    ],
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
 logging_step5 = logging.getLogger("launch_instance")
 logging_step5.setLevel(logging.INFO)
 fh = logging.FileHandler("launch_instance.log")
 fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 logging_step5.addHandler(fh)
+# StreamHandler do logging_step5 - widoczne w GitHub Actions
+sh = logging.StreamHandler(sys.stdout)
+sh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+logging_step5.addHandler(sh)
 
 # Set up OCI Config and Clients
 oci_config_path = OCI_CONFIG if OCI_CONFIG else "~/.oci/config"
@@ -96,6 +104,9 @@ IMAGE_LIST_KEYS = [
     "size_in_mbs",
     "time_created",
 ]
+
+# Licznik prób - globalny
+attempt_counter = 0
 
 
 def write_into_file(file_path, data):
@@ -121,27 +132,18 @@ def send_email(subject, body, email, password):
     Raises:
         smtplib.SMTPException: If an error occurs during the SMTP communication.
     """
-    # Set up the MIME
     message = MIMEMultipart()
     message["Subject"] = subject
     message["From"] = email
     message["To"] = email
-
-    # Attach HTML content to the email
     html_body = MIMEText(body, "html")
     message.attach(html_body)
-
-    # Connect to the SMTP server
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         try:
-            # Start TLS for security
             server.starttls()
-            # Login to the server
             server.login(email, password)
-            # Send the email
             server.sendmail(email, email, message.as_string())
         except smtplib.SMTPException as mail_err:
-            # Handle SMTP exceptions (e.g., authentication failure, connection issues)
             logging.error("Error while sending email: %s", mail_err)
             raise
 
@@ -168,7 +170,6 @@ def generate_html_body(instance):
     Returns:
         str: HTML body for the email.
     """
-    # Replace placeholders with instance details
     with open('email_content.html', 'r', encoding='utf-8') as email_temp:
         html_template = email_temp.read()
     html_body = html_template.replace('&lt;INSTANCE_ID&gt;', instance.id)
@@ -176,7 +177,6 @@ def generate_html_body(instance):
     html_body = html_body.replace('&lt;AD&gt;', instance.availability_domain)
     html_body = html_body.replace('&lt;SHAPE&gt;', instance.shape)
     html_body = html_body.replace('&lt;STATE&gt;', instance.lifecycle_state)
-
     return html_body
 
 
@@ -198,10 +198,7 @@ def create_instance_details_file_and_notify(instance, shape=ARM_SHAPE):
     arm_body = '\n'.join(details)
     body = arm_body if shape == ARM_SHAPE else micro_body
     write_into_file('INSTANCE_CREATED', body)
-
-    # Generate HTML body for email
     html_body = generate_html_body(instance)
-
     if NOTIFY_EMAIL:
         send_email('OCI INSTANCE CREATED', html_body, EMAIL, EMAIL_PASSWORD)
 
@@ -213,7 +210,6 @@ def notify_on_failure(failure_msg):
     Args:
         failure_msg (msg): The error message.
     """
-
     mail_body = (
         "The script encountered an unhandled error and exited unexpectedly.\n\n"
         "Please re-run the script by executing './setup_init.sh rerun'.\n\n"
@@ -256,10 +252,9 @@ def check_instance_state_and_write(compartment_id, shape, states=('RUNNING', 'PR
                 return True
             if len(micro_instance_list) == 1 and not SECOND_MICRO_INSTANCE:
                 create_instance_details_file_and_notify(micro_instance_list[-1], shape)
-                return True       
+                return True
         if tries - 1 > 0:
             time.sleep(60)
-
     return False
 
 
@@ -275,22 +270,29 @@ def handle_errors(command, data, log):
         bool: True if the error is temporary and the operation should be retried after a delay.
         Raises Exception for unexpected errors.
     """
-
-    # Check for temporary errors that can be retried
+    global attempt_counter
     if "code" in data:
         if (data["code"] in ("TooManyRequests", "Out of host capacity.", 'InternalError')) \
                 or (data["message"] in ("Out of host capacity.", "Bad Gateway")):
-            log.info("Command: %s--\nOutput: %s", command, data)
+            attempt_counter += 1
+            log.info(
+                ">>> Próba #%d | Brak capacity (Out of host capacity) | Czekam %ds przed kolejną próbą...",
+                attempt_counter, WAIT_TIME
+            )
             time.sleep(WAIT_TIME)
             return True
 
     if "status" in data and data["status"] == 502:
-        log.info("Command: %s~~\nOutput: %s", command, data)
+        attempt_counter += 1
+        log.info(
+            ">>> Próba #%d | Bad Gateway (502) | Czekam %ds przed kolejną próbą...",
+            attempt_counter, WAIT_TIME
+        )
         time.sleep(WAIT_TIME)
         return True
+
     failure_msg = '\n'.join([f'{key}: {value}' for key, value in data.items()])
     notify_on_failure(failure_msg)
-    # Raise an exception for unexpected errors
     raise Exception("Error: %s" % data)
 
 
@@ -325,12 +327,11 @@ def generate_ssh_key_pair(public_key_file: Union[str, Path], private_key_file: U
     """Generates an SSH key pair and saves them to the specified files.
 
     Args:
-        public_key_file :file to save the public key.
-        private_key_file : The file to save the private key.
+        public_key_file: file to save the public key.
+        private_key_file: The file to save the private key.
     """
     key = paramiko.RSAKey.generate(2048)
     key.write_private_key_file(private_key_file)
-    # Save public key to file
     write_into_file(public_key_file, (f"ssh-rsa {key.get_base64()} "
                                       f"{Path(public_key_file).stem}_auto_generated"))
 
@@ -345,16 +346,13 @@ def read_or_generate_ssh_public_key(public_key_file: Union[str, Path]):
         Union[str, Path]: The SSH public key.
     """
     public_key_path = Path(public_key_file)
-
     if not public_key_path.is_file():
         logging.info("SSH key doesn't exist... Generating SSH Key Pair")
         public_key_path.parent.mkdir(parents=True, exist_ok=True)
         private_key_path = public_key_path.with_name(f"{public_key_path.stem}_private")
         generate_ssh_key_pair(public_key_path, private_key_path)
-
     with open(public_key_path, "r", encoding="utf-8") as pub_key_file:
         ssh_public_key = pub_key_file.read()
-
     return ssh_public_key
 
 
@@ -375,12 +373,21 @@ def launch_instance():
     Raises:
         Exception: Raises an exception if an unexpected error occurs.
     """
+    global attempt_counter
+
+    logging.info("=" * 60)
+    logging.info("START: Uruchamianie skryptu tworzenia instancji OCI")
+    logging.info("Shape: %s | OCPU: 4 | RAM: 24GB | Dysk: %sGB", ARM_SHAPE, BOOT_VOLUME_SIZE)
+    logging.info("=" * 60)
+
     # Step 1 - Get TENANCY
+    logging.info("Krok 1: Pobieranie danych uzytkownika...")
     user_info = execute_oci_command(iam_client, "get_user", OCI_USER_ID)
     oci_tenancy = user_info.compartment_id
     logging.info("OCI_TENANCY: %s", oci_tenancy)
 
     # Step 2 - Get AD Name
+    logging.info("Krok 2: Pobieranie Availability Domains...")
     availability_domains = execute_oci_command(iam_client,
                                                "list_availability_domains",
                                                compartment_id=oci_tenancy)
@@ -390,6 +397,7 @@ def launch_instance():
     logging.info("OCI_AD_NAME: %s", oci_ad_name)
 
     # Step 3 - Get Subnet ID
+    logging.info("Krok 3: Pobieranie Subnet ID...")
     oci_subnet_id = OCI_SUBNET_ID
     if not oci_subnet_id:
         subnets = execute_oci_command(network_client,
@@ -399,6 +407,7 @@ def launch_instance():
     logging.info("OCI_SUBNET_ID: %s", oci_subnet_id)
 
     # Step 4 - Get Image ID of Compute Shape
+    logging.info("Krok 4: Pobieranie Image ID...")
     if not OCI_IMAGE_ID:
         images = execute_oci_command(
             compute_client,
@@ -415,26 +424,47 @@ def launch_instance():
         logging.info("OCI_IMAGE_ID: %s", oci_image_id)
     else:
         oci_image_id = OCI_IMAGE_ID
+        logging.info("OCI_IMAGE_ID (z env): %s", oci_image_id)
 
-    assign_public_ip = ASSIGN_PUBLIC_IP.lower() in [ "true", "1", "y", "yes" ]
+    assign_public_ip = ASSIGN_PUBLIC_IP.lower() in ["true", "1", "y", "yes"]
 
-    boot_volume_size = max(50, int(BOOT_VOLUME_SIZE))
+    # Dysk: min 50GB, max 200GB (free tier limit) - zmiana z oryginalnych 50GB
+    boot_volume_size = max(50, min(200, int(BOOT_VOLUME_SIZE)))
+    logging.info("Boot volume size: %dGB (free tier max: 200GB)", boot_volume_size)
 
     ssh_public_key = read_or_generate_ssh_public_key(SSH_AUTHORIZED_KEYS_FILE)
 
     # Step 5 - Launch Instance if it's not already exist and running
+    logging.info("Krok 5: Sprawdzanie czy instancja juz istnieje...")
     instance_exist_flag = check_instance_state_and_write(oci_tenancy, OCI_COMPUTE_SHAPE, tries=1)
 
     if OCI_COMPUTE_SHAPE == "VM.Standard.A1.Flex":
+        # Maksymalne parametry free tier: 4 OCPU / 24GB RAM
         shape_config = oci.core.models.LaunchInstanceShapeConfigDetails(ocpus=4, memory_in_gbs=24)
+        logging.info("Konfiguracja shape: 4 OCPU / 24 GB RAM (maksimum free tier)")
     else:
         shape_config = oci.core.models.LaunchInstanceShapeConfigDetails(ocpus=1, memory_in_gbs=1)
+        logging.info("Konfiguracja shape: 1 OCPU / 1 GB RAM (Micro)")
+
+    if instance_exist_flag:
+        logging.info("Instancja juz istnieje! Koncze.")
+        return
+
+    logging.info("Rozpoczynam petle prob tworzenia instancji...")
+    logging.info("Parametry: Shape=%s | OCPU=4 | RAM=24GB | Dysk=%dGB | PublicIP=%s",
+                 OCI_COMPUTE_SHAPE, boot_volume_size, assign_public_ip)
 
     while not instance_exist_flag:
+        current_ad = next(oci_ad_names)
+        attempt_counter += 1
+        logging.info(
+            ">>> Proba #%d | AD: %s | Shape: %s | OCPU: 4 | RAM: 24GB | Dysk: %dGB",
+            attempt_counter, current_ad, OCI_COMPUTE_SHAPE, boot_volume_size
+        )
         try:
             launch_instance_response = compute_client.launch_instance(
                 launch_instance_details=oci.core.models.LaunchInstanceDetails(
-                    availability_domain=next(oci_ad_names),
+                    availability_domain=current_ad,
                     compartment_id=oci_tenancy,
                     create_vnic_details=oci.core.models.CreateVnicDetails(
                         assign_public_ip=assign_public_ip,
@@ -461,20 +491,25 @@ def launch_instance():
                 )
             )
             if launch_instance_response.status == 200:
+                logging.info(">>> SUKCES! Instancja stworzona po %d probach!", attempt_counter)
+                logging.info(">>> Shape: %s | OCPU: 4 | RAM: 24GB | Dysk: %dGB",
+                             OCI_COMPUTE_SHAPE, boot_volume_size)
                 logging_step5.info(
                     "Command: launch_instance\nOutput: %s", launch_instance_response
                 )
                 instance_exist_flag = check_instance_state_and_write(oci_tenancy, OCI_COMPUTE_SHAPE)
 
         except oci.exceptions.ServiceError as srv_err:
-            if srv_err.code == "LimitExceeded":                
-                logging_step5.info("Encoundered LimitExceeded Error checking if instance is created" \
-                                   "code :%s, message: %s, status: %s", srv_err.code, srv_err.message, srv_err.status)                
+            if srv_err.code == "LimitExceeded":
+                logging_step5.info(
+                    "LimitExceeded – sprawdzam czy instancja juz istnieje | code: %s | message: %s",
+                    srv_err.code, srv_err.message
+                )
                 instance_exist_flag = check_instance_state_and_write(oci_tenancy, OCI_COMPUTE_SHAPE)
                 if instance_exist_flag:
-                    logging_step5.info("%s , exiting the program", srv_err.code)
+                    logging_step5.info("Instancja znaleziona po LimitExceeded – koncze.")
                     sys.exit()
-                logging_step5.info("Didn't find an instance , proceeding with retries")     
+                logging_step5.info("Brak instancji po LimitExceeded – kontynuuje proby.")
             data = {
                 "status": srv_err.status,
                 "code": srv_err.code,
@@ -484,6 +519,10 @@ def launch_instance():
 
 
 if __name__ == "__main__":
+    print("=" * 60, flush=True)
+    print("OCI Instance Creation Script - START", flush=True)
+    print(f"Cel: VM.Standard.A1.Flex | 4 OCPU | 24GB RAM | {BOOT_VOLUME_SIZE}GB dysk", flush=True)
+    print("=" * 60, flush=True)
     send_discord_message("🚀 OCI Instance Creation Script: Starting up! Let's create some cloud magic!")
     try:
         launch_instance()
